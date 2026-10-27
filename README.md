@@ -7,61 +7,94 @@ Solucion de arquitectura y procesamiento de datos para **DataMart S.A.S.** que i
 ## 1. Arquitectura de la Solucion
 
 ```mermaid
-flowchart TD
-    subgraph Ingesta ["Capa de Fuentes de Datos"]
-        F1["data/data.csv\n(Operacional Diario)"]
-        F2["data/online_retail_II.csv\n(Historial Consolidado)"]
-        MAP["data/category_mapping.csv\n(Reglas de Catalogo)"]
+flowchart LR
+    %% =========================================================================
+    %% ESTILOS Y PALETA DE COLORES
+    %% =========================================================================
+    classDef fuentes fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1;
+    classDef airflow fill:#FFF8E1,stroke:#FFA000,stroke-width:2px,color:#E65100;
+    classDef staging fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#4A148C;
+    classDef postgres fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20;
+    classDef consumo fill:#FCE4EC,stroke:#C2185B,stroke-width:2px,color:#880E4F;
+
+    %% =========================================================================
+    %% 1. CAPA DE FUENTES DE DATOS
+    %% =========================================================================
+    subgraph S1["1. Fuentes de Datos (Raw CSVs)"]
+        direction TB
+        F1["fa:fa-file-csv data/data.csv<br/><i>(Transacciones operacionales)</i>"]:::fuentes
+        F2["fa:fa-file-csv data/online_retail_II.csv<br/><i>(Historial extendido)</i>"]:::fuentes
+        F3["fa:fa-file-csv data/category_mapping.csv<br/><i>(Mapeo oficial 5 categorías)</i>"]:::fuentes
     end
 
-    subgraph Microservicios ["Microservicios Internos"]
-        API["products-api (FastAPI:8000)\nGET /products\nGET /products/{stock_code}"]
+    %% =========================================================================
+    %% 2. ORQUESTACIÓN Y PROCESAMIENTO ETL (AIRFLOW 3)
+    %% =========================================================================
+    subgraph S2["2. Orquestador y Pipeline ETL (Apache Airflow 3.1.5)"]
+        direction TB
+        T1["<b>1. extract_and_unify</b><br/>Lectura combinada y deduplicación<br/><code>keep='last'</code>"]:::airflow
+        T2["<b>2. transform_and_clean</b><br/>• Normalización Fechas UTC<br/>• Manejo de CLIENTE_ANONIMO<br/>• Mapeo categorías & Fallback 'Otros'<br/>• Segregación de rechazos"]:::airflow
+        T3["<b>3. load_staging_parquet</b><br/>Persistencia columnar intermedia"]:::airflow
+        T4["<b>4. load_oltp_database</b><br/>Carga operacional en PostgreSQL"]:::airflow
+        T5["<b>5. load_olap_star_schema</b><br/>Carga dimensional en estrella"]:::airflow
+
+        T1 --> T2 --> T3
+        T3 --> T4
+        T3 --> T5
     end
 
-    subgraph Orquestacion ["Apache Airflow 3.1.5"]
-        T1["validate_inputs"]
-        T2["extract_transform_validate"]
-        
-        subgraph TG_OLTP ["TaskGroup: capa_operacional_oltp"]
-            T3["load_to_oltp"]
+    %% =========================================================================
+    %% 3. CAPA DE STAGING INTERMEDIA
+    %% =========================================================================
+    subgraph S3["3. Staging Idempotente (Parquet)"]
+        direction TB
+        P1["data/staging_clean_retail.parquet<br/><i>(528,743 filas validadas)</i>"]:::staging
+        P2["data/staging_rejections_retail.parquet<br/><i>(5,042 anomalías de auditoría)</i>"]:::staging
+    end
+
+    %% =========================================================================
+    %% 4. CAPA DE ALMACENAMIENTO (POSTGRESQL 15 DOCKER)
+    %% =========================================================================
+    subgraph S4["4. Repositorio de Datos (PostgreSQL 15 - Puerto 5434:5432)"]
+        direction TB
+        subgraph OLTP["Base Operacional: datamart_oltp"]
+            DB_OLTP[("transacciones_raw<br/><i>(Histórico espejo OLTP)</i>")]:::postgres
         end
-        
-        subgraph TG_OLAP ["TaskGroup: capa_analitica_olap"]
-            T4["load_to_olap"]
-        end
-        
-        T5["audit_and_quality_check"]
 
-        T1 --> T2
-        T2 -->|Staging Parquet| TG_OLTP
-        TG_OLTP --> TG_OLAP
-        TG_OLAP --> T5
-    end
+        subgraph OLAP["Base Analítica: datamart_olap (Modelo Estrella)"]
+            DIM_P[("dim_producto<br/><i>(3,827 SKUs Canónicos)</i>")]:::postgres
+            DIM_C[("dim_cliente<br/><i>(4,372 Clientes & Anónimo)</i>")]:::postgres
+            DIM_T[("dim_tiempo<br/><i>(21,802 Timestamps UTC)</i>")]:::postgres
+            FACT_V[("fact_ventas<br/><i>(528,743 Hechos de Venta/Dev)</i>")]:::postgres
+            RECHAZOS[("tabla_rechazos<br/><i>(Auditoría y Data Quality)</i>")]:::postgres
 
-    subgraph Almacenamiento ["PostgreSQL 15 (Puerto 5434:5432)"]
-        subgraph OLTP ["datamart_oltp"]
-            RAW[("transacciones_raw")]
-        end
-        subgraph OLAP ["datamart_olap (Modelo Estrella)"]
-            DIM_C[("dim_cliente\n(incluye es_anonimo)")]
-            DIM_P[("dim_producto\n(desc_canonica, categoria)")]
-            DIM_T[("dim_tiempo\n(grano timestamp)")]
-            FACT[("fact_ventas\n(ventas, devoluciones, revenue)")]
-            REJ[("tabla_rechazos\n(auditoria forense JSONB)")]
+            DIM_P --- FACT_V
+            DIM_C --- FACT_V
+            DIM_T --- FACT_V
         end
     end
 
-    subgraph BI ["Capa de Consumo y Analitica"]
-        PBI["Power BI Desktop / SQL Clients\n(Puerto 5434)"]
-        NB["Jupyter Notebook\nanalisis_negocio_datamart.ipynb"]
+    %% =========================================================================
+    %% 5. CAPA DE SERVICIO, CONSUMO Y ANALÍTICA
+    %% =========================================================================
+    subgraph S5["5. Capa de Servicio y Analítica de Negocio"]
+        direction TB
+        API["<b>FastAPI Microservice (Puerto 8000)</b><br/>• Conexión SQL a dim_producto<br/>• Paginación (skip, limit)<br/>• Rate Limit: 60 req/min SlowAPI"]:::consumo
+        JUPYTER["<b>Jupyter Notebook</b><br/><code>analisis_negocio_datamart.ipynb</code><br/>Visualizaciones y Seaborn Charts"]:::consumo
+        BI["<b>Herramientas BI & SQL</b><br/>Power BI Desktop / DBeaver / pgAdmin<br/><i>(Puerto 5434)</i>"]:::consumo
     end
 
-    Ingesta --> T1
-    API -.->|Catalogo Normalizado| T2
-    T3 --> RAW
-    T4 --> DIM_C & DIM_P & DIM_T & FACT & REJ
-    OLAP --> PBI
-    OLAP --> NB
+    %% =========================================================================
+    %% CONEXIONES ENTRE CAPAS (FLUJO HORIZONTAL)
+    %% =========================================================================
+    F1 & F2 & F3 --> T1
+    T3 --> P1 & P2
+    T4 --> DB_OLTP
+    T5 --> OLAP
+
+    DIM_P -->|Consulta SQL directa| API
+    OLAP -->|Consultas Analíticas| JUPYTER
+    OLAP -->|Conexión JDBC / ODBC| BI
 ```
 
 ---
