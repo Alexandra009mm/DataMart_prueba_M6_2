@@ -1,0 +1,33 @@
+# Entorno y Secretos
+.env
+*.env
+!*.env.example
+
+# Python y entornos virtuales
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Datos temporales e intermedios (Parquet y Staging)
+data/*.parquet
+data/staging_*.parquet
+data/staging/
+
+# Logs de Airflow y temporales
+logs/
+*.log
+
+# Docker y bases de datos locales
+.docker/
+*.pid
+
+# Archivos de soporte y scratch temporales
+scratch/
+simple_auth_manager_passwords.json

@@ -1,0 +1,46 @@
+// ============================================================================
+// DataMart S.A.S. - Repositorio Analítico (datamart_olap)
+// Esquema Dimensional en Estrella (Star Schema)
+// Pega este código directamente en https://dbdiagram.io para visualizar o exportar
+// ============================================================================
+
+Table dim_cliente {
+  cliente_id varchar(50) [pk, note: "Identificador único (o 'CLIENTE_ANONIMO')"]
+  pais varchar(100) [note: "País del cliente"]
+  es_anonimo boolean [default: false, note: "Bandera de usuario no registrado"]
+}
+
+Table dim_producto {
+  stock_code varchar(50) [pk, note: "Código SKU único de producto"]
+  descripcion_canonica text [note: "Descripción estandarizada más frecuente"]
+  categoria varchar(50) [note: "Categoría homologada (Electrónica, Hogar, Ropa, Deportes, Papelería, Otros)"]
+}
+
+Table dim_tiempo {
+  tiempo_id timestamp [pk, note: "Marca temporal en UTC (grano transaccional)"]
+  anio int [note: "Año de la transacción"]
+  mes int [note: "Mes (1 - 12)"]
+  dia int [note: "Día del mes (1 - 31)"]
+  dia_semana varchar(20) [note: "Nombre del día de la semana"]
+}
+
+Table fact_ventas {
+  fact_id serial [pk, note: "Identificador subrogado de la transacción"]
+  invoice_no varchar(50) [note: "Número de factura (prefijo 'C' para devoluciones)"]
+  stock_code varchar(50) [ref: > dim_producto.stock_code, note: "FK a dim_producto"]
+  cliente_id varchar(50) [ref: > dim_cliente.cliente_id, note: "FK a dim_cliente"]
+  tiempo_id timestamp [ref: > dim_tiempo.tiempo_id, note: "FK a dim_tiempo"]
+  tipo_transaccion varchar(20) [note: "'VENTA' o 'DEVOLUCION'"]
+  cantidad int [note: "Unidades (positivas en venta, negativas en devolución)"]
+  precio_unitario numeric(10, 2) [note: "Precio de venta unitario en GBP"]
+  revenue_bruto numeric(12, 2) [note: "Monto bruto sin descontar cancelaciones"]
+  revenue_neto numeric(12, 2) [note: "Monto neto imputable a la empresa"]
+}
+
+Table tabla_rechazos {
+  rechazo_id serial [pk, note: "ID autoincremental del rechazo"]
+  fuente_origen varchar(100) [note: "Archivo de origen ('data.csv' / 'online_retail_II.csv')"]
+  motivo text [note: "Regla violada ('PRECIO_NEGATIVO', 'PRECIO_CERO_SIN_MOTIVO', etc.)"]
+  payload_crudo jsonb [note: "Registro crudo completo en formato JSON"]
+  fecha_rechazo timestamp [note: "Timestamp de auditoría de ingesta"]
+}
